@@ -68,6 +68,8 @@ const isStockColumn = (key) => {
   return normalized.includes('stock') || normalized.includes('avail');
 };
 
+const hasValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
+
 const getCriticalSetting = (criticalSettings, sku) => {
   const candidates = [
     sku,
@@ -145,14 +147,13 @@ export const processInventoryData = (responses, stores, criticalSettings = {}) =
       const latestStatus = skuMeta.map(meta => {
         const { cols } = meta;
 
-        // Find the latest response that has ANY data for this SKU's stock column
-        const response = storeResponses.find(r => 
-          cols.stock && r[cols.stock] !== undefined && r[cols.stock] !== ''
-        );
+        const stockResponse = storeResponses.find(r => cols.stock && hasValue(r[cols.stock]));
+        const expiryResponse = storeResponses.find(r => cols.expiry && hasValue(r[cols.expiry]));
+        const response = stockResponse || expiryResponse || null;
         
-        const rawStock = response ? response[cols.stock] : null;
+        const rawStock = stockResponse ? stockResponse[cols.stock] : null;
         const stock = rawStock !== null ? normalizeStockCount(rawStock) : null;
-        const expiryDate = response ? (response[cols.expiry] || null) : null;
+        const expiryDate = expiryResponse ? String(expiryResponse[cols.expiry]).trim() : null;
         const daysLeft = calculateDaysToExpiry(expiryDate);
         
         // Only flag as critical if we actually have data (stock !== null)

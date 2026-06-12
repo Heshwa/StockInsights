@@ -326,7 +326,7 @@ function StoreDetail({ store }) {
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [hideZeroStock, setHideZeroStock] = useState(false);
-  const [sortConfig, setSortConfig] = useState({ key: 'product', direction: 'asc' });
+  const [sortConfig, setSortConfig] = useState({ key: 'default', direction: 'asc' });
 
   const lastVisit = store.lastUpdated && store.lastUpdated !== 'No data'
     ? new Date(store.lastUpdated).toLocaleString()
@@ -365,8 +365,10 @@ function StoreDetail({ store }) {
         result = aDays - bDays;
       } else if (sortConfig.key === 'status') {
         result = statusWeight[getStatus(a)] - statusWeight[getStatus(b)];
-      } else {
+      } else if (sortConfig.key === 'product') {
         result = a.sku.localeCompare(b.sku);
+      } else {
+        result = 0;
       }
 
       return sortConfig.direction === 'asc' ? result : -result;
@@ -384,7 +386,7 @@ function StoreDetail({ store }) {
     return (
       <button className={`sort-heading ${active ? 'active' : ''}`} onClick={() => toggleSort(sortKey)}>
         <span>{children}</span>
-        <span className="sort-arrow">{active ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}</span>
+        <span className="sort-arrow">{active ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</span>
       </button>
     );
   };
@@ -453,7 +455,11 @@ function StoreDetail({ store }) {
                   {p.stock === 'N/A' ? <span style={{ color: 'var(--text-muted)' }}>—</span> : p.stock}
                 </td>
                 <td>{p.criticalLevel}</td>
-                <td>{p.expiryDate || '—'}</td>
+                <td>
+                  {p.expiryDate || (p.stock === 0 ? (
+                    <span style={{ color: 'var(--text-muted)' }}>No stock</span>
+                  ) : '—')}
+                </td>
                 <td style={{ color: p.isExpired ? 'var(--danger)' : (p.isExpiringSoon ? 'var(--warning)' : 'inherit') }}>
                   {p.daysLeft !== null ? `${p.daysLeft}d` : '—'}
                 </td>
