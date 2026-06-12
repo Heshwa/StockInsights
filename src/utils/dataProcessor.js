@@ -1,5 +1,3 @@
-import Papa from 'papaparse';
-
 /**
  * Normalizes stock count strings into numbers
  */
@@ -27,32 +25,104 @@ export const calculateDaysToExpiry = (expiryDateStr) => {
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 };
 
-/**
- * Reconciles the response data with store master and critical levels
- */
-export const processInventoryData = (responses, criticalLevels, stores) => {
-  const normalize = (str) => str?.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-  
-  // Use first non-empty response row for column detection
+export const normalizeSkuKey = (str) => str?.trim().toLowerCase().replace(/[^a-z0-9]/g, '') || '';
+
+const defaultCriticalRows = [
+  ['Curd 1Kg Tub', 4, 7],
+  ['Curd Pouch', 3, 7],
+  ['Paneer 200gm', 10, 10],
+  ['Paneer 500gm', 3, 10],
+  ['Mysore Pak', 2, 15],
+  ['Dhoodh Peda', 12, 15],
+  ['Badam Milk 175ml', 360, 45],
+  ['Badam Milk Glass', 4, 45],
+  ['Pista Milk Glass', 4, 45],
+  ['Choccolate Thickshake', 24, 45],
+  ['Vanilla Thickshake', 24, 45],
+  ['Strawberry Thickshake', 24, 45],
+  ['UHT Lassi', 24, 45],
+  ['UHT Buttermilk', 24, 45],
+  ['Recharge Apple', 48, 45],
+  ['Recharge Mango', 48, 45],
+  ['Recharge Orange', 48, 45],
+  ['110ml Badam Milk', 180, 45],
+  ['Milkyshot Chocolate', 24, 45],
+  ['Milkyshot Caramel', 24, 45],
+  ['Kesar Milk', 180, 45]
+];
+
+export const DEFAULT_CRITICAL_SETTINGS = defaultCriticalRows.reduce((acc, [sku, criticalLevel, expiryThreshold]) => {
+  acc[normalizeSkuKey(sku)] = { criticalLevel, expiryThreshold };
+  return acc;
+}, {});
+
+const extractSkuNameFromColumn = (columnName) => {
+  if (!columnName) return '';
+  return columnName
+    .replace(/\s*-\s*(stock|availability|stock availability|stock availabiity|stock avialbility|stock availbility).*$/i, '')
+    .trim();
+};
+
+const isStockColumn = (key) => {
+  const normalized = key.toLowerCase();
+  return normalized.includes('stock') || normalized.includes('avail');
+};
+
+const getCriticalSetting = (criticalSettings, sku) => {
+  const candidates = [
+    sku,
+    sku.replace(/Choccolate/i, 'Chocolate'),
+    sku.replace(/Vanilla/i, 'Vannila'),
+    sku.replace(/Dhoodh/i, 'Doodh'),
+    sku.replace(/Milkyshot/i, 'Milky Shot'),
+    `${sku} Pet`
+  ];
+
+  const findSetting = (settings) => candidates
+    .map(candidate => settings[normalizeSkuKey(candidate)])
+    .find(Boolean);
+
+  return {
+    ...(findSetting(DEFAULT_CRITICAL_SETTINGS) || {}),
+    ...(findSetting(criticalSettings) || {})
+  };
+};
+
+export const buildSkuMeta = (responses, criticalSettings = {}) => {
   const headerRow = responses.find(r => Object.keys(r).length > 2) || responses[0];
+  if (!headerRow) return [];
+
+  return Object.keys(headerRow)
+    .filter(isStockColumn)
+    .map(stockColumn => {
+      const sku = extractSkuNameFromColumn(stockColumn);
+      const setting = getCriticalSetting(criticalSettings, sku);
+      const cols = findSkuColumns(headerRow, sku);
+
+      return {
+        sku,
+        criticalLevel: parseInt(setting.criticalLevel ?? 0, 10),
+        expiryThreshold: parseInt(setting.expiryThreshold ?? 45, 10),
+        cols
+      };
+    })
+    .filter(item => item.sku);
+};
+
+/**
+ * Reconciles the response data with store master and critical settings
+ */
+export const processInventoryData = (responses, stores, criticalSettings = {}) => {
+  const normalize = (str) => str?.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 
   // Sort responses by timestamp descending to get latest first
   const sortedResponses = [...responses]
     .filter(r => r['Timestamp']) // drop empty rows
     .sort((a, b) => new Date(b.Timestamp) - new Date(a.Timestamp));
 
-  // Pre-compute SKU column mappings once for all SKUs
-  const skuMeta = criticalLevels
-    .filter(item => item.SKU && item.SKU.trim())
-    .map(item => ({
-      sku: item.SKU,
-      criticalLevel: parseInt(item['Critical Stock Level'] || 0, 10),
-      expiryThreshold: parseInt(item['Expiry Alert - Days to expiry'] || 0, 10),
-      cols: findSkuColumns(headerRow, item.SKU)
-    }));
-
-  // Debug: log column mappings to console for verification
-  console.log('SKU Column Mappings:', skuMeta.map(m => ({ sku: m.sku, ...m.cols })));
+  // Pre-compute SKU column mappings once for all SKUs. Display names come from
+  // the response sheet headers so spelling stays consistent with form data.
+  const skuMeta = buildSkuMeta(responses, criticalSettings);
 
   // Map stores with fuzzy matching
   const storeData = stores
@@ -145,35 +215,48 @@ function findSkuColumns(row, sku) {
     .split(' ')
     .filter(w => w.length > 1);
 
-  // Character-set based fuzzy word match — handles typos like choccolate/chocolate
-  const charSetMatch = (skuWord, colKey) => {
-    const skuChars = new Set(skuWord.split(''));
-    const colWords = colKey.toLowerCase().replace(/[^a-z ]/g, '').split(' ').filter(w => w.length > 1);
-    return colWords.some(cw => {
-      const cwChars = new Set(cw.split(''));
-      const skuArr = [...skuChars];
-      const matched = skuArr.filter(c => cwChars.has(c)).length;
-      return matched / skuArr.length >= 0.8;
-    });
+  const levenshtein = (a, b) => {
+    const matrix = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+    for (let j = 1; j <= b.length; j++) matrix[0][j] = j;
+
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        matrix[i][j] = a[i - 1] === b[j - 1]
+          ? matrix[i - 1][j - 1]
+          : Math.min(matrix[i - 1][j - 1], matrix[i][j - 1], matrix[i - 1][j]) + 1;
+      }
+    }
+
+    return matrix[a.length][b.length];
   };
 
-  const isMatch = (key) => {
+  const wordMatches = (skuWord, colWord) => {
+    if (skuWord === colWord || skuWord.includes(colWord) || colWord.includes(skuWord)) return true;
+    return levenshtein(skuWord, colWord) / Math.max(skuWord.length, colWord.length) <= 0.34;
+  };
+
+  const matchScore = (key) => {
     const k = key.toLowerCase();
     // Hard constraint: every numeric token must appear verbatim
-    if (numericTokens.length > 0 && !numericTokens.every(n => k.includes(n))) return false;
-    // Soft constraint: ≥ 60% of non-numeric words must fuzzy-match
-    if (skuWords.length > 0) {
-      const matched = skuWords.filter(w => charSetMatch(w, k)).length;
-      if (matched / skuWords.length < 0.6) return false;
-    }
-    return true;
+    if (numericTokens.length > 0 && !numericTokens.every(n => k.includes(n))) return 0;
+
+    const colWords = k.replace(/[^a-z ]/g, ' ').split(' ').filter(w => w.length > 1);
+    const missingWords = skuWords.filter(w => !colWords.some(cw => wordMatches(w, cw)));
+    const matched = skuWords.length - missingWords.length;
+    const optionalPackagingMiss = missingWords.length === 1 && ['pet', 'tub'].includes(missingWords[0]);
+
+    if (skuWords.length > 0 && missingWords.length > 0 && !optionalPackagingMiss) return 0;
+    return matched + numericTokens.length;
   };
 
-  const skuCols = keys.filter(isMatch);
+  const bestColumn = (typeMatcher) => keys
+    .map(key => ({ key, score: matchScore(key) }))
+    .filter(({ key, score }) => score > 0 && typeMatcher(key.toLowerCase()))
+    .sort((a, b) => b.score - a.score || a.key.length - b.key.length)[0]?.key || '';
   
   return {
-    stock: skuCols.find(k => k.toLowerCase().includes('stock') || k.toLowerCase().includes('avail')) || '',
-    manufacturing: skuCols.find(k => k.toLowerCase().includes('manuf')) || '',
-    expiry: skuCols.find(k => k.toLowerCase().includes('expir')) || ''
+    stock: bestColumn(k => k.includes('stock') || k.includes('avail')),
+    manufacturing: bestColumn(k => k.includes('manuf')),
+    expiry: bestColumn(k => k.includes('expir'))
   };
 }

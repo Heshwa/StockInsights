@@ -6,13 +6,13 @@ import {
   RefreshCcw, 
   AlertTriangle, 
   CheckCircle2, 
-  Store as StoreIcon,
   Search,
   Package,
   Calendar,
-  AlertCircle
+  AlertCircle,
+  Save
 } from 'lucide-react';
-import { processInventoryData } from './utils/dataProcessor';
+import { buildSkuMeta, normalizeSkuKey, processInventoryData } from './utils/dataProcessor';
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -21,22 +21,35 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState(null);
   const [selectedStore, setSelectedStore] = useState(null);
+  const [criticalItems, setCriticalItems] = useState([]);
+  const [criticalSettings, setCriticalSettings] = useState(() => {
+    try {
+      const saved = localStorage.getItem('criticalLevelSettings');
+      const legacy = localStorage.getItem('criticalLevelOverrides');
+      return JSON.parse(saved || legacy || '{}');
+    } catch {
+      return {};
+    }
+  });
 
-  const fetchData = async () => {
+  const fetchData = async (nextSheetId = sheetId, settings = criticalSettings) => {
     setLoading(true);
     try {
       // For now, load local files as fallback if sheetId is empty
       // In production, we'd use the sheetId to build the URL
-      const responsesUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+      const responsesUrl = `https://docs.google.com/spreadsheets/d/${nextSheetId}/export?format=csv`;
       
-      const [resp, crit, stores] = await Promise.all([
+      const [resp, stores] = await Promise.all([
         fetchCsv(responsesUrl),
-        fetchCsv('/CRITICAL_LEVELS-Table 1.csv'),
         fetchCsv('/STORE_MASTER-Table 1.csv')
       ]);
 
-      const processed = processInventoryData(resp, crit, stores);
+      const processed = processInventoryData(resp, stores, settings);
+      setCriticalItems(buildSkuMeta(resp, settings));
       setData(processed);
+      setSelectedStore(current => (
+        current ? processed.find(store => store.storeId === current.storeId) || current : current
+      ));
       setLastRefreshed(new Date().toLocaleString());
     } catch (err) {
       console.error('Fetch error:', err);
@@ -65,7 +78,23 @@ function App() {
     setSheetId(id);
     localStorage.setItem('sheetId', id);
     alert('Settings saved. Refreshing data...');
-    fetchData();
+    fetchData(id);
+  };
+
+  const saveCriticalLevels = (items) => {
+    const nextSettings = items.reduce((acc, item) => {
+      acc[normalizeSkuKey(item.sku)] = {
+        criticalLevel: item.criticalLevel,
+        expiryThreshold: item.expiryThreshold
+      };
+      return acc;
+    }, {});
+
+    setCriticalSettings(nextSettings);
+    localStorage.setItem('criticalLevelSettings', JSON.stringify(nextSettings));
+    setCriticalItems(items);
+    alert('Critical levels saved. Refreshing data...');
+    fetchData(sheetId, nextSettings);
   };
 
   return (
@@ -85,7 +114,7 @@ function App() {
           </button>
           <button 
             className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
-            onClick={() => setActiveTab('settings')}
+            onClick={() => { setActiveTab('settings'); setSelectedStore(null); }}
           >
             <SettingsIcon size={20} />
             Settings
@@ -105,7 +134,7 @@ function App() {
           </div>
           <div className="topbar-right">
             <span className="last-refresh">Last Refreshed: {lastRefreshed}</span>
-            <button className="btn btn-primary" onClick={fetchData} disabled={loading}>
+            <button className="btn btn-primary" onClick={() => fetchData()} disabled={loading}>
               <RefreshCcw size={18} style={{ marginRight: '8px', animation: loading ? 'spin 1s linear infinite' : 'none' }} />
               Refresh
             </button>
@@ -116,11 +145,16 @@ function App() {
           {activeTab === 'dashboard' && !selectedStore && (
             <DashboardOverview data={data} onStoreClick={setSelectedStore} />
           )}
-          {selectedStore && (
+          {activeTab === 'dashboard' && selectedStore && (
             <StoreDetail store={selectedStore} />
           )}
           {activeTab === 'settings' && (
-            <Settings sheetId={sheetId} onSave={saveSettings} />
+            <Settings
+              sheetId={sheetId}
+              onSave={saveSettings}
+              criticalItems={criticalItems}
+              onSaveCriticalLevels={saveCriticalLevels}
+            />
           )}
         </section>
       </main>
@@ -157,20 +191,55 @@ function App() {
         .store-stat-item .count { font-size: 1.125rem; font-weight: 600; }
         .store-stat-item.danger .count { color: var(--danger); }
         .store-stat-item.warning .count { color: var(--warning); }
+        .store-detail-meta { display: flex; gap: 1rem; margin-bottom: 1rem; font-size: 0.875rem; color: var(--text-muted); }
+        .table-controls { background: white; border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 1rem; margin-bottom: 1rem; display: grid; grid-template-columns: minmax(280px, 1fr) auto minmax(160px, auto); gap: 1rem; align-items: end; }
+        .control-field { display: flex; flex-direction: column; gap: 0.375rem; }
+        .control-field label, .checkbox-field span { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); }
+        .search-field { position: relative; }
+        .search-field svg { position: absolute; left: 0.875rem; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
+        .search-field input { width: 100%; height: 42px; padding-left: 2.5rem; background: #f8fafc; }
+        .search-field input:focus { background: white; }
+        .checkbox-field { height: 42px; display: flex; align-items: center; gap: 0.5rem; }
+        .checkbox-field input { width: 16px; height: 16px; accent-color: var(--primary); }
+        select { height: 42px; padding: 0 2rem 0 0.75rem; border: 1px solid var(--border); border-radius: 8px; background: white; color: var(--text-main); font-size: 0.875rem; outline: none; }
+        select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1); }
         
         .product-table-wrapper { background: white; border-radius: 12px; border: 1px solid var(--border); box-shadow: var(--shadow); overflow: hidden; }
         .product-table { width: 100%; border-collapse: collapse; text-align: left; }
         .product-table th { background: #f1f5f9; padding: 1rem; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); }
+        .sort-heading { display: inline-flex; align-items: center; gap: 0.35rem; color: inherit; font-size: inherit; font-weight: inherit; text-transform: inherit; }
+        .sort-heading.active { color: var(--primary); }
+        .sort-arrow { min-width: 0.75rem; color: currentColor; }
         .product-table td { padding: 1rem; border-top: 1px solid var(--border); font-size: 0.875rem; }
         .product-table tr.critical-row { background: #fef2f2; }
         .product-table tr.warning-row { background: #fffbeb; }
         
-        .settings-card { max-width: 600px; }
+        .settings-layout { display: grid; gap: 1.5rem; max-width: 980px; }
+        .settings-card { width: 100%; }
         .form-group { margin-bottom: 1.5rem; }
         .form-group label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.5rem; color: var(--text-muted); }
         .input-group { display: flex; gap: 8px; }
-        input[type="text"] { flex: 1; padding: 0.75rem 1rem; border: 1px solid var(--border); border-radius: 8px; font-size: 0.875rem; outline: none; transition: border-color 0.2s; }
-        input[type="text"]:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1); }
+        input[type="text"], input[type="number"] { padding: 0.75rem 1rem; border: 1px solid var(--border); border-radius: 8px; font-size: 0.875rem; outline: none; transition: border-color 0.2s; }
+        input[type="text"] { flex: 1; }
+        input[type="number"] { width: 120px; }
+        input[type="text"]:focus, input[type="number"]:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1); }
+        .settings-table-wrapper { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+        .settings-table { width: 100%; border-collapse: collapse; text-align: left; }
+        .settings-table th { background: #f1f5f9; padding: 0.75rem 1rem; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); white-space: nowrap; }
+        .settings-table td { padding: 0.75rem 1rem; border-top: 1px solid var(--border); font-size: 0.875rem; vertical-align: middle; }
+        .settings-actions { display: flex; justify-content: flex-end; margin-top: 1rem; }
+        @media (max-width: 1100px) {
+          .table-controls { grid-template-columns: 1fr 1fr; }
+        }
+        @media (max-width: 760px) {
+          .layout { flex-direction: column; }
+          .sidebar { width: 100%; flex-direction: row; align-items: center; }
+          .sidebar-header { padding: 1rem; }
+          .nav { flex-direction: row; padding: 1rem; }
+          .topbar { height: auto; padding: 1rem; gap: 1rem; align-items: flex-start; flex-direction: column; }
+          .content-area { padding: 1rem; }
+          .table-controls { grid-template-columns: 1fr; }
+        }
       `}</style>
     </div>
   );
@@ -180,7 +249,6 @@ function DashboardOverview({ data, onStoreClick }) {
   const totalCritical = data.reduce((acc, store) => acc + store.products.filter(p => p.isCritical).length, 0);
   const totalWarning = data.reduce((acc, store) => acc + store.products.filter(p => p.isExpiringSoon).length, 0);
   const totalExpired = data.reduce((acc, store) => acc + store.products.filter(p => p.isExpired).length, 0);
-  const totalActive = data.reduce((acc, store) => acc + store.products.filter(p => p.hasData && typeof p.stock === 'number' && p.stock > 0).length, 0);
 
   return (
     <>
@@ -190,13 +258,6 @@ function DashboardOverview({ data, onStoreClick }) {
           <div className="stat-info">
             <h4>Active Stores</h4>
             <div className="value">{data.length}</div>
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon" style={{ background: '#eff6ff', color: '#2563eb' }}><Package /></div>
-          <div className="stat-info">
-            <h4>Active SKUs</h4>
-            <div className="value">{totalActive}</div>
           </div>
         </div>
         <div className="stat-card">
@@ -262,13 +323,75 @@ function DashboardOverview({ data, onStoreClick }) {
 }
 
 function StoreDetail({ store }) {
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [hideZeroStock, setHideZeroStock] = useState(false);
+  const [sortConfig, setSortConfig] = useState({ key: 'product', direction: 'asc' });
+
   const lastVisit = store.lastUpdated && store.lastUpdated !== 'No data'
     ? new Date(store.lastUpdated).toLocaleString()
     : 'No visit data';
 
+  const getStatus = (product) => {
+    if (!product.hasData) return 'no-data';
+    if (product.isExpired) return 'expired';
+    if (product.isCritical) return 'low-stock';
+    if (product.isExpiringSoon) return 'expiring';
+    return 'good';
+  };
+
+  const statusWeight = {
+    expired: 0,
+    'low-stock': 1,
+    expiring: 2,
+    good: 3,
+    'no-data': 4
+  };
+
+  const visibleProducts = [...store.products]
+    .filter(product => product.sku.toLowerCase().includes(query.trim().toLowerCase()))
+    .filter(product => !hideZeroStock || product.stock !== 0)
+    .filter(product => statusFilter === 'all' || getStatus(product) === statusFilter)
+    .sort((a, b) => {
+      let result = 0;
+
+      if (sortConfig.key === 'availability') {
+        const aStock = typeof a.stock === 'number' ? a.stock : -1;
+        const bStock = typeof b.stock === 'number' ? b.stock : -1;
+        result = aStock - bStock;
+      } else if (sortConfig.key === 'daysLeft') {
+        const aDays = a.daysLeft ?? Number.MAX_SAFE_INTEGER;
+        const bDays = b.daysLeft ?? Number.MAX_SAFE_INTEGER;
+        result = aDays - bDays;
+      } else if (sortConfig.key === 'status') {
+        result = statusWeight[getStatus(a)] - statusWeight[getStatus(b)];
+      } else {
+        result = a.sku.localeCompare(b.sku);
+      }
+
+      return sortConfig.direction === 'asc' ? result : -result;
+    });
+
+  const toggleSort = (key) => {
+    setSortConfig(current => ({
+      key,
+      direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  const SortHeading = ({ sortKey, children }) => {
+    const active = sortConfig.key === sortKey;
+    return (
+      <button className={`sort-heading ${active ? 'active' : ''}`} onClick={() => toggleSort(sortKey)}>
+        <span>{children}</span>
+        <span className="sort-arrow">{active ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}</span>
+      </button>
+    );
+  };
+
   return (
     <div>
-      <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+      <div className="store-detail-meta">
         <span>Store Code: <strong>{store.storeCode}</strong></span>
         <span>Last Visit: <strong>{lastVisit}</strong></span>
       </div>
@@ -277,21 +400,54 @@ function StoreDetail({ store }) {
           ⚠️ No visit responses found for this store yet.
         </div>
       )}
+      <div className="table-controls">
+        <div className="control-field">
+          <label>Product</label>
+          <div className="search-field">
+            <Search size={16} />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search products"
+            />
+          </div>
+        </div>
+        <label className="checkbox-field">
+          <input
+            type="checkbox"
+            checked={hideZeroStock}
+            onChange={(e) => setHideZeroStock(e.target.checked)}
+          />
+          <span>Hide 0 Stock</span>
+        </label>
+        <div className="control-field">
+          <label>Status</label>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="all">All Statuses</option>
+            <option value="low-stock">Low Stock</option>
+            <option value="expiring">Expiring</option>
+            <option value="expired">Expired</option>
+            <option value="good">Good</option>
+            <option value="no-data">No Data</option>
+          </select>
+        </div>
+      </div>
       <div className="product-table-wrapper">
         <table className="product-table">
           <thead>
             <tr>
-              <th>Product Name</th>
-              <th>Current Stock</th>
+              <th><SortHeading sortKey="product">Product Name</SortHeading></th>
+              <th><SortHeading sortKey="availability">Current Stock</SortHeading></th>
               <th>Min Level</th>
               <th>Expiry Date</th>
-              <th>Days Left</th>
-              <th>Status</th>
+              <th><SortHeading sortKey="daysLeft">Days Left</SortHeading></th>
+              <th><SortHeading sortKey="status">Status</SortHeading></th>
             </tr>
           </thead>
           <tbody>
-            {store.products.map((p, idx) => (
-              <tr key={idx} className={p.isCritical ? 'critical-row' : (p.isExpiringSoon ? 'warning-row' : '')}>
+            {visibleProducts.map((p) => (
+              <tr key={p.sku} className={p.isCritical ? 'critical-row' : (p.isExpiringSoon ? 'warning-row' : '')}>
                 <td style={{ fontWeight: 500 }}>{p.sku}</td>
                 <td style={{ color: p.isCritical ? 'var(--danger)' : 'inherit', fontWeight: p.isCritical ? 700 : 400 }}>
                   {p.stock === 'N/A' ? <span style={{ color: 'var(--text-muted)' }}>—</span> : p.stock}
@@ -316,6 +472,13 @@ function StoreDetail({ store }) {
                 </td>
               </tr>
             ))}
+            {visibleProducts.length === 0 && (
+              <tr>
+                <td colSpan="6" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
+                  No products match the current filters.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -323,23 +486,86 @@ function StoreDetail({ store }) {
   );
 }
 
-function Settings({ sheetId, onSave }) {
+function Settings({ sheetId, onSave, criticalItems, onSaveCriticalLevels }) {
   const [val, setVal] = useState(sheetId);
+  const [items, setItems] = useState(criticalItems);
+
+  useEffect(() => {
+    setItems(criticalItems);
+  }, [criticalItems]);
+
+  const updateItem = (index, field, value) => {
+    const numericValue = Math.max(0, parseInt(value || 0, 10));
+    setItems(current => current.map((item, i) => (
+      i === index ? { ...item, [field]: numericValue } : item
+    )));
+  };
+
   return (
-    <div className="card settings-card">
-      <div className="form-group">
-        <label>Google Sheet ID</label>
-        <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-          Enter the ID from your browser's address bar. The sheet must be published to the web (File &gt; Share &gt; Publish to web).
-        </p>
-        <div className="input-group">
-          <input 
-            type="text" 
-            value={val} 
-            onChange={(e) => setVal(e.target.value)} 
-            placeholder="e.g. 1a2b3c4d5e6f7g8h9i0j..."
-          />
-          <button className="btn btn-primary" onClick={() => onSave(val)}>Save & Update</button>
+    <div className="settings-layout">
+      <div className="card settings-card">
+        <div className="form-group">
+          <label>Google Sheet ID</label>
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+            Enter the ID from your browser's address bar. The sheet must be published to the web (File &gt; Share &gt; Publish to web).
+          </p>
+          <div className="input-group">
+            <input 
+              type="text" 
+              value={val} 
+              onChange={(e) => setVal(e.target.value)} 
+              placeholder="e.g. 1a2b3c4d5e6f7g8h9i0j..."
+            />
+            <button className="btn btn-primary" onClick={() => onSave(val)}>Save & Update</button>
+          </div>
+        </div>
+      </div>
+      <div className="card settings-card">
+        <div className="form-group">
+          <label>Critical Levels</label>
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+            Product names follow the response sheet. Edits are saved in this browser and applied on refresh.
+          </p>
+          <div className="settings-table-wrapper">
+            <table className="settings-table">
+              <thead>
+                <tr>
+                  <th>Product Name</th>
+                  <th>Critical Stock</th>
+                  <th>Expiry Alert Days</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item, index) => (
+                  <tr key={item.sku}>
+                    <td>{item.sku}</td>
+                    <td>
+                      <input
+                        type="number"
+                        min="0"
+                        value={item.criticalLevel}
+                        onChange={(e) => updateItem(index, 'criticalLevel', e.target.value)}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        min="0"
+                        value={item.expiryThreshold}
+                        onChange={(e) => updateItem(index, 'expiryThreshold', e.target.value)}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="settings-actions">
+            <button className="btn btn-primary" onClick={() => onSaveCriticalLevels(items)}>
+              <Save size={18} style={{ marginRight: '8px' }} />
+              Save Critical Levels
+            </button>
+          </div>
         </div>
       </div>
     </div>
