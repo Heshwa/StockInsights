@@ -112,7 +112,8 @@ export const buildSkuMeta = (responses, criticalSettings = {}) => {
 };
 
 /**
- * Reconciles the response data with store master and critical settings
+ * Reconciles the response data with store master and critical settings.
+ * Uses ONLY the most recent response row per store — no merging across rows.
  */
 export const processInventoryData = (responses, stores, criticalSettings = {}) => {
   const normalize = (str) => str?.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -142,19 +143,30 @@ export const processInventoryData = (responses, stores, criticalSettings = {}) =
       });
 
       const hasAnyData = storeResponses.length > 0;
+      
+      // Use ONLY the latest (most recent) response row for this store.
+      // sortedResponses[0] is the most recent entry due to descending sort.
+      const latestResponse = storeResponses[0] || null;
 
-      // Map each SKU to its latest known status for this store
+      // Map each SKU using data from the single latest response row only
       const latestStatus = skuMeta.map(meta => {
         const { cols } = meta;
 
-        const stockResponse = storeResponses.find(r => cols.stock && hasValue(r[cols.stock]));
-        const expiryResponse = storeResponses.find(r => cols.expiry && hasValue(r[cols.expiry]));
-        const response = stockResponse || expiryResponse || null;
+        // Only check the latest response row for stock and expiry
+        let stock = null;
+        let expiryDate = null;
         
-        const rawStock = stockResponse ? stockResponse[cols.stock] : null;
-        const stock = rawStock !== null ? normalizeStockCount(rawStock) : null;
-        const expiryDate = expiryResponse ? String(expiryResponse[cols.expiry]).trim() : null;
+        if (latestResponse && cols.stock && hasValue(latestResponse[cols.stock])) {
+          const rawStock = latestResponse[cols.stock];
+          stock = normalizeStockCount(rawStock);
+        }
+        
+        if (latestResponse && cols.expiry && hasValue(latestResponse[cols.expiry])) {
+          expiryDate = String(latestResponse[cols.expiry]).trim();
+        }
+        
         const daysLeft = calculateDaysToExpiry(expiryDate);
+        const hasDataForSku = stock !== null || expiryDate !== null;
         
         // Only flag as critical if we actually have data (stock !== null)
         const isCritical = stock !== null && stock <= meta.criticalLevel;
@@ -168,18 +180,18 @@ export const processInventoryData = (responses, stores, criticalSettings = {}) =
           expiryThreshold: meta.expiryThreshold,
           expiryDate,
           daysLeft,
-          hasData: !!response,
+          hasData: hasDataForSku,
           isCritical,
           isExpiringSoon,
           isExpired,
-          lastUpdated: response ? response['Timestamp'] : null
+          lastUpdated: latestResponse ? latestResponse['Timestamp'] : null
         };
       });
 
       // Determine store-wide health only from items with actual data
       const hasCritical = latestStatus.some(s => s.isCritical);
       const hasExpiring = latestStatus.some(s => s.isExpiringSoon || s.isExpired);
-      const mostRecentUpdate = storeResponses[0]?.['Timestamp'] || 'No data';
+      const mostRecentUpdate = latestResponse?.['Timestamp'] || 'No data';
       
       return {
         storeId: store['Store ID'],

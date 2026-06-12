@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Papa from 'papaparse';
 import { 
   LayoutDashboard, 
@@ -10,11 +10,16 @@ import {
   Package,
   Calendar,
   AlertCircle,
-  Save
+  Save,
+  LogOut
 } from 'lucide-react';
 import { buildSkuMeta, normalizeSkuKey, processInventoryData } from './utils/dataProcessor';
+import Login from './components/Login';
+import { login as authLogin, logout as authLogout, isLoggedIn, getUserRole } from './utils/auth';
 
 function App() {
+  const [loggedIn, setLoggedIn] = useState(isLoggedIn);
+  const [userRole, setUserRole] = useState(getUserRole);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [sheetId, setSheetId] = useState(localStorage.getItem('sheetId') || '1PyCT1HTPvcGb_70eYPcrhCp-AgjGrLTi7tJ4gGIpVd8');
   const [data, setData] = useState([]);
@@ -22,6 +27,7 @@ function App() {
   const [lastRefreshed, setLastRefreshed] = useState(null);
   const [selectedStore, setSelectedStore] = useState(null);
   const [criticalItems, setCriticalItems] = useState([]);
+  const isAdmin = userRole === 'admin';
   const [criticalSettings, setCriticalSettings] = useState(() => {
     try {
       const saved = localStorage.getItem('criticalLevelSettings');
@@ -32,7 +38,7 @@ function App() {
     }
   });
 
-  const fetchData = async (nextSheetId = sheetId, settings = criticalSettings) => {
+  const fetchData = useCallback(async (nextSheetId = sheetId, settings = criticalSettings, skipCriticalRebuild = false) => {
     setLoading(true);
     try {
       // For now, load local files as fallback if sheetId is empty
@@ -45,7 +51,11 @@ function App() {
       ]);
 
       const processed = processInventoryData(resp, stores, settings);
-      setCriticalItems(buildSkuMeta(resp, settings));
+      // Only rebuild critical items from settings when NOT called from saveCriticalLevels.
+      // When called from saveCriticalLevels, the items are already set with user edits.
+      if (!skipCriticalRebuild) {
+        setCriticalItems(buildSkuMeta(resp, settings));
+      }
       setData(processed);
       setSelectedStore(current => (
         current ? processed.find(store => store.storeId === current.storeId) || current : current
@@ -57,7 +67,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [sheetId, criticalSettings]);
 
   const fetchCsv = (url) => {
     return new Promise((resolve, reject) => {
@@ -72,7 +82,7 @@ function App() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [fetchData]);
 
   const saveSettings = (id) => {
     setSheetId(id);
@@ -94,15 +104,36 @@ function App() {
     localStorage.setItem('criticalLevelSettings', JSON.stringify(nextSettings));
     setCriticalItems(items);
     alert('Critical levels saved. Refreshing data...');
-    fetchData(sheetId, nextSettings);
+    // Pass true for skipCriticalRebuild to prevent fetchData from overwriting
+    // the items we just set with buildSkuMeta.
+    fetchData(sheetId, nextSettings, true);
   };
+
+  const handleLogin = (username, password) => {
+    const result = authLogin(username, password);
+    if (result.success) {
+      setLoggedIn(true);
+      setUserRole(result.role);
+    }
+    return result;
+  };
+
+  const handleLogout = () => {
+    authLogout();
+    setLoggedIn(false);
+    setUserRole('viewer');
+  };
+
+  if (!loggedIn) {
+    return <Login onLogin={handleLogin} />;
+  }
 
   return (
     <div className="layout">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <Package size={24} color="var(--primary)" />
-          <span>StockInsight</span>
+          <Package size={20} color="var(--primary)" style={{ flexShrink: 0 }} />
+          <span style={{ fontSize: '1rem', lineHeight: 1.3, whiteSpace: 'normal', wordBreak: 'break-word' }}>Metro Cash & Carry Management</span>
         </div>
         <nav className="nav">
           <button 
@@ -112,14 +143,26 @@ function App() {
             <LayoutDashboard size={20} />
             Dashboard
           </button>
-          <button 
-            className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
-            onClick={() => { setActiveTab('settings'); setSelectedStore(null); }}
-          >
-            <SettingsIcon size={20} />
-            Settings
-          </button>
+          {isAdmin && (
+            <button 
+              className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('settings'); setSelectedStore(null); }}
+            >
+              <SettingsIcon size={20} />
+              Settings
+            </button>
+          )}
         </nav>
+        <div style={{ padding: '1rem' }}>
+          <button 
+            className="nav-item"
+            onClick={handleLogout}
+            style={{ color: '#94a3b8' }}
+          >
+            <LogOut size={20} />
+            Logout
+          </button>
+        </div>
       </aside>
 
       <main className="main-content">
@@ -163,7 +206,7 @@ function App() {
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .layout { display: flex; height: 100vh; }
         .sidebar { width: 260px; background: #1e293b; color: #f8fafc; display: flex; flex-direction: column; }
-        .sidebar-header { padding: 2rem; font-size: 1.5rem; font-weight: 700; display: flex; align-items: center; gap: 12px; font-family: var(--font-heading); }
+        .sidebar-header { padding: 2rem; font-size: 1.5rem; font-weight: 700; display: flex; align-items: flex-start; gap: 10px; font-family: var(--font-heading); }
         .nav { flex: 1; padding: 1rem; display: flex; flex-direction: column; gap: 8px; }
         .nav-item { display: flex; align-items: center; gap: 12px; padding: 0.75rem 1rem; border-radius: 8px; color: #94a3b8; transition: all 0.2s; text-align: left; width: 100%; }
         .nav-item:hover { background: #334155; color: #f8fafc; }
@@ -195,8 +238,7 @@ function App() {
         .table-controls { background: white; border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 1rem; margin-bottom: 1rem; display: grid; grid-template-columns: minmax(280px, 1fr) auto minmax(160px, auto); gap: 1rem; align-items: end; }
         .control-field { display: flex; flex-direction: column; gap: 0.375rem; }
         .control-field label, .checkbox-field span { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); }
-        .search-field { position: relative; }
-        .search-field svg { position: absolute; left: 0.875rem; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
+        .search-field { position: relative; display: flex; align-items: center; }
         .search-field input { width: 100%; height: 42px; padding-left: 2.5rem; background: #f8fafc; }
         .search-field input:focus { background: white; }
         .checkbox-field { height: 42px; display: flex; align-items: center; gap: 0.5rem; }
@@ -406,12 +448,13 @@ function StoreDetail({ store }) {
         <div className="control-field">
           <label>Product</label>
           <div className="search-field">
-            <Search size={16} />
+            <Search size={16} style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', pointerEvents: 'none', zIndex: 1 }} />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search products"
+              style={{ paddingLeft: '2.5rem' }}
             />
           </div>
         </div>
@@ -513,7 +556,7 @@ function Settings({ sheetId, onSave, criticalItems, onSaveCriticalLevels }) {
         <div className="form-group">
           <label>Google Sheet ID</label>
           <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-            Enter the ID from your browser's address bar. The sheet must be published to the web (File &gt; Share &gt; Publish to web).
+            {"Enter the ID from your browser's address bar. The sheet must be published to the web (File > Share > Publish to web)."}
           </p>
           <div className="input-group">
             <input 
