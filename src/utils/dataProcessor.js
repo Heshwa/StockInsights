@@ -30,8 +30,8 @@ export const normalizeSkuKey = (str) => str?.trim().toLowerCase().replace(/[^a-z
 const defaultCriticalRows = [
   ['Curd 1Kg Tub', 4, 7],
   ['Curd Pouch', 3, 7],
-  ['Paneer 200gm', 10, 10],
   ['Paneer 165gm', 10, 10],
+  ['Paneer 200gm', 10, 10],
   ['Paneer 500gm', 3, 10],
   ['Mysore Pak', 2, 15],
   ['Dhoodh Peda', 12, 15],
