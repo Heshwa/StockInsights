@@ -76,6 +76,9 @@ const isStockColumn = (key) => {
 
 const hasValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
 
+const PANEER_165_KEY = normalizeSkuKey('Paneer 165gm');
+const PANEER_200_KEY = normalizeSkuKey('Paneer 200gm');
+
 const getCriticalSetting = (criticalSettings, sku) => {
   const candidates = [
     sku,
@@ -172,14 +175,47 @@ export const processInventoryData = (responses, stores, criticalSettings = {}) =
         // Only check the latest response row for stock and expiry
         let stock = null;
         let expiryDate = null;
-        
+
         if (latestResponse && cols.stock && hasValue(latestResponse[cols.stock])) {
           const rawStock = latestResponse[cols.stock];
           stock = normalizeStockCount(rawStock);
         }
-        
+
         if (latestResponse && cols.expiry && hasValue(latestResponse[cols.expiry])) {
           expiryDate = String(latestResponse[cols.expiry]).trim();
+        }
+
+        // Paneer 165gm was added to the form after responses had already been
+        // collected for Paneer 200gm. In the sheet, the old 200gm expiry
+        // column was renamed to "Paneer 165gm Expiry Date", while new 165gm
+        // stock and 200gm expiry columns were appended later. For a response
+        // submitted before those new fields existed, move that legacy date
+        // back to Paneer 200gm instead of displaying it against Paneer 165gm.
+        if (
+          latestResponse &&
+          normalizeSkuKey(meta.sku) === PANEER_200_KEY &&
+          stock !== null &&
+          stock > 0 &&
+          !expiryDate
+        ) {
+          const paneer165Meta = skuMeta.find(item => normalizeSkuKey(item.sku) === PANEER_165_KEY);
+          const paneer165StockValue = paneer165Meta?.cols.stock
+            ? latestResponse[paneer165Meta.cols.stock]
+            : null;
+          const legacyPaneer200Expiry = paneer165Meta?.cols.expiry
+            ? latestResponse[paneer165Meta.cols.expiry]
+            : null;
+
+          if (!hasValue(paneer165StockValue) && hasValue(legacyPaneer200Expiry)) {
+            expiryDate = String(legacyPaneer200Expiry).trim();
+          }
+        }
+
+        // An expiry date is only actionable while units of that exact SKU are
+        // in stock. This also prevents a legacy/misaligned date from making a
+        // zero-stock or missing-stock product look healthy.
+        if (stock === null || stock <= 0) {
+          expiryDate = null;
         }
         
         const daysLeft = calculateDaysToExpiry(expiryDate);

@@ -245,7 +245,7 @@ function App() {
         .checkbox-field input { width: 16px; height: 16px; accent-color: var(--primary); }
         select { height: 42px; padding: 0 2rem 0 0.75rem; border: 1px solid var(--border); border-radius: 8px; background: white; color: var(--text-main); font-size: 0.875rem; outline: none; }
         select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1); }
-        
+
         .product-table-wrapper { background: white; border-radius: 12px; border: 1px solid var(--border); box-shadow: var(--shadow); overflow: hidden; }
         .product-table { width: 100%; border-collapse: collapse; text-align: left; }
         .product-table th { background: #f1f5f9; padding: 1rem; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); }
@@ -255,7 +255,7 @@ function App() {
         .product-table td { padding: 1rem; border-top: 1px solid var(--border); font-size: 0.875rem; }
         .product-table tr.critical-row { background: #fef2f2; }
         .product-table tr.warning-row { background: #fffbeb; }
-        
+
         .settings-layout { display: grid; gap: 1.5rem; max-width: 980px; }
         .settings-card { width: 100%; }
         .form-group { margin-bottom: 1.5rem; }
