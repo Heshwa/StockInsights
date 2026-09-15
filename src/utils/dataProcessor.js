@@ -94,14 +94,27 @@ const getStoreNameFromResponse = (row) => {
 
 export const collectStoresForResponses = (responses, stores = []) => {
   const normalize = (str) => str?.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  // Known spelling variants that refer to the same physical store.
+  // Merchandisers typed both "Kangapura" and "Kanakapura" in the Bangalore
+  // sheet — they must collapse into a single "Kanakapura" card.
+  const STORE_ALIASES = [
+    ['kanakapura', 'kangapura'],
+    ['binnypet', 'binnyet'],
+  ];
+  const canonicalKey = (key) => {
+    for (const group of STORE_ALIASES) {
+      if (group.includes(key)) return group[0];
+    }
+    return key;
+  };
   const seen = new Map();
   (stores || [])
     .filter((s) => s && s['Store Name'] && String(s['Store Name']).trim() !== '')
-    .forEach((s) => seen.set(normalize(s['Store Name']), s));
+    .forEach((s) => seen.set(canonicalKey(normalize(s['Store Name'])), s));
   (responses || []).forEach((r) => {
     const name = getStoreNameFromResponse(r);
     if (!name) return;
-    const key = normalize(name);
+    const key = canonicalKey(normalize(name));
     if (!key || seen.has(key)) return;
     // Synthesize a master-like entry so downstream code works unchanged.
     seen.set(key, {
@@ -179,6 +192,14 @@ export const buildSkuMeta = (responses, criticalSettings = {}) => {
  */
 export const processInventoryData = (responses, stores, criticalSettings = {}) => {
   const normalize = (str) => str?.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  // Must mirror collectStoresForResponses so response rows with alias
+  // spellings attach to the same canonical store card.
+  const canonicalStoreKey = (name) => {
+    const key = normalize(name || '');
+    if (['kanakapura', 'kangapura'].includes(key)) return 'kanakapura';
+    if (['binnypet', 'binnyet'].includes(key)) return 'binnypet';
+    return key;
+  };
 
   // Sort responses by timestamp descending to get latest first
   const sortedResponses = [...responses]
@@ -195,13 +216,13 @@ export const processInventoryData = (responses, stores, criticalSettings = {}) =
   const storeData = workingStores
     .filter(store => store['Store Name'])
     .map(store => {
-      const sName = normalize(store['Store Name']);
-      
+      const sName = canonicalStoreKey(store['Store Name']);
+
       // Find responses for this store, accounting for typos.
       // Use the same response store-name extraction as collectStoresForResponses
       // so sheets with slightly different header spellings still match.
       const storeResponses = sortedResponses.filter(r => {
-        const rName = normalize(getStoreNameFromResponse(r) || '');
+        const rName = canonicalStoreKey(getStoreNameFromResponse(r) || '');
         if (!rName) return false;
         // Direct match, substring match, or match on first ~5 significant chars
         return rName === sName || rName.includes(sName) || sName.includes(rName) ||

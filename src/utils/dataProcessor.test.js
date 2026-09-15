@@ -134,3 +134,27 @@ test('hyderabad tab is scoped to the four hyderabad stores', () => {
   assert.deepEqual(KNOWN_STORES.hyderabad, ['Kukatpally', 'Uppal', 'Rajendra Nagar', 'Kompally']);
   assert.deepEqual(KNOWN_STORES.bangalore.length, 6);
 });
+
+test('merges Kangapura responses into the Kanakapura card', () => {
+  const master = [{ 'Store ID': '10601135', 'Store Name': 'Kanakapura', 'Store Code': 'TOSL' }];
+  const out = processInventoryData([
+    {
+      Timestamp: '8/24/2026 12:15:40',
+      'Store name': 'Kanakapura',
+      'Curd 1Kg Tub - Stock availability': '5',
+      'Curd 1Kg Expiry Date': '9/19/2026'
+    },
+    {
+      Timestamp: '8/29/2026 15:15:09',
+      'Store name': 'Kangapura',
+      'Curd 1Kg Tub - Stock availability': '18',
+      'Curd 1Kg Expiry Date': '9/11/2026'
+    }
+  ], master);
+  const names = out.map((s) => s.storeName);
+  assert.ok(!names.some((n) => /kangapura/i.test(n) && !/kanakapura/i.test(n)), `no separate Kangapura card, got: ${names}`);
+  const kanak = out.find((s) => /kanakapura/i.test(s.storeName));
+  assert.ok(kanak.hasAnyData, 'merged card should have data');
+  // Latest timestamp wins (Kangapura row is newer).
+  assert.equal(kanak.products.find((p) => p.sku === 'Curd 1Kg Tub').stock, 18);
+});
