@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 
-export const USERS_STORAGE_KEY = 'stockinsights_users_v1';
+export const USERS_STORAGE_KEY = 'stockinsights_users_v2';
 
 const DEFAULT_USERS = [
   {
@@ -9,14 +9,21 @@ const DEFAULT_USERS = [
     role: 'admin'
   },
   {
-    username: 'user',
-    passwordHash: '$2b$10$ODpe0wtXYJCY2whMi4ceruUmE303S5RircXAJ6OT/58f4n4gPZlgi',
+    username: 'Himika',
+    // Password: Password@123 (share privately — never commit plaintext)
+    passwordHash: '$2b$10$NqLot8moPk9yklYgZp9MhOaKdIGo386rjOTxKZYfMcqsB1IZEr2XC',
     role: 'viewer'
   },
   {
-    username: 'rajendra',
-    // Password: Rajendra@2026 (share privately — never commit plaintext)
-    passwordHash: '$2b$10$10/xkKTsczv81UXALPFJMeJQAKXn1qCVEKJqODtcbrkFLczpVgfMi',
+    username: 'ASE',
+    // Password: Password@123 (share privately — never commit plaintext)
+    passwordHash: '$2b$10$yt6G/dnRJOk4BChAzgFlwOhXsZaPP9pObDlgZH3BYAGESJj0F.WZ2',
+    role: 'viewer'
+  },
+  {
+    username: 'Suman',
+    // Password: Password@123 (share privately — never commit plaintext)
+    passwordHash: '$2b$10$oTvJRtb66jreRhnEL1SrBOIiZbnpGpz.JYRMLD1F4BnvUNQwa.KFu',
     role: 'viewer'
   }
 ];
@@ -51,12 +58,30 @@ export const listUsers = () => loadCustomUsers() || [...DEFAULT_USERS];
 
 export const getAllUsers = () => listUsers().map(({ passwordHash, ...rest }) => rest);
 
+// Users removed from the built-in defaults (e.g. legacy 'user' / 'rajendra')
+// must stay removed even if an older browser still has them in localStorage
+// under a previous storage key generation. Filter any localStorage-only
+// usernames that are not part of the current defaults on load.
+const REMOVED_LEGACY_USERS = ['user', 'rajendra'];
+
 const mergedUsers = () => {
   const custom = loadCustomUsers();
   if (!custom) return [...DEFAULT_USERS];
   // Admin-added users override / extend the built-in defaults by username.
+  // Legacy removed users (old 'user' / 'rajendra' drafts) are dropped even
+  // if an old browser still carries them in localStorage.
   const byName = new Map(DEFAULT_USERS.map((u) => [normalizeName(u.username), { ...u }]));
-  custom.forEach((u) => byName.set(normalizeName(u.username), { ...u }));
+  custom.forEach((u) => {
+    const key = normalizeName(u.username);
+    if (!byName.has(key) && REMOVED_LEGACY_USERS.includes(key)) return;
+    byName.set(key, { ...u });
+  });
+  // Enforce removal of legacy defaults even if a stale draft re-adds them.
+  REMOVED_LEGACY_USERS.forEach((name) => {
+    if (!DEFAULT_USERS.some((u) => normalizeName(u.username) === name)) {
+      byName.delete(name);
+    }
+  });
   return [...byName.values()];
 };
 

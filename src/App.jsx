@@ -60,12 +60,14 @@ function App() {
 
   const visibleSheets = isAdmin
     ? sheets
-    : sheets.filter((s) => s.allowedUsers.includes(username));
+    : sheets.filter((s) => s.allowedUsers.some(
+        (u) => String(u).toLowerCase() === String(username || '').toLowerCase()
+      ));
   const activeSheet = visibleSheets.find((s) => s.id === activeSheetId) || visibleSheets[0] || null;
   const activeCache = (activeSheet && sheetState[activeSheet.id]) || {
     data: [],
     criticalItems: [],
-    criticalSettings: loadCriticalForSheet(activeSheet?.id || 'main'),
+    criticalSettings: loadCriticalForSheet(activeSheet?.id || 'bangalore'),
     lastRefreshed: null,
     error: null
   };

@@ -1,4 +1,4 @@
-export const SHEETS_STORAGE_KEY = 'stockinsights_sheets_v1';
+export const SHEETS_STORAGE_KEY = 'stockinsights_sheets_v2';
 
 export const MAIN_SHEET_ID = '1PyCT1HTPvcGb_70eYPcrhCp-AgjGrLTi7tJ4gGIpVd8';
 export const HYDERABAD_SHEET_ID = '1QDEL8u5983ZQeqGD1vxvYB3mmRYKc2PQC2YSuXVk9hY';
@@ -19,13 +19,13 @@ export const DEFAULT_SHEETS = [
     id: 'bangalore',
     name: 'Bangalore',
     sheetId: MAIN_SHEET_ID,
-    allowedUsers: ['yoga', 'user'],
+    allowedUsers: ['yoga', 'Himika', 'ASE'],
   },
   {
     id: 'hyderabad',
     name: 'Hyderabad',
     sheetId: HYDERABAD_SHEET_ID,
-    allowedUsers: ['rajendra', 'yoga'],
+    allowedUsers: ['yoga', 'Himika', 'Suman'],
   },
 ];
 
@@ -41,15 +41,71 @@ const isValidSheet = (s) =>
 export const loadSheets = () => {
   try {
     const raw = localStorage.getItem(SHEETS_STORAGE_KEY);
-    if (!raw) return migrateLegacySheet([...DEFAULT_SHEETS]);
+    if (!raw) {
+      // Migrate a previous-generation draft (v1) forward, remapping removed
+      // users ('user' -> ASE on Bangalore, 'rajendra' -> Suman on Hyderabad).
+      const prev = localStorage.getItem('stockinsights_sheets_v1');
+      if (prev) {
+        try {
+          const parsedPrev = JSON.parse(prev);
+          if (Array.isArray(parsedPrev)) {
+            const remapped = parsedPrev
+              .filter(isValidSheet)
+              .map((s) => ({
+                ...s,
+                allowedUsers: (s.allowedUsers || []).flatMap((u) => {
+                  if (u === 'user') return s.id === 'bangalore' || s.id === 'main' ? ['ASE'] : [];
+                  if (u === 'rajendra') return s.id === 'hyderabad' || s.id === 'rajendra-nagar' ? ['Suman'] : [];
+                  return [u];
+                }),
+              }));
+            const merged = mergeWithDefaults(remapped);
+            localStorage.setItem(SHEETS_STORAGE_KEY, JSON.stringify(merged));
+            return merged;
+          }
+        } catch { /* fall through to defaults */ }
+      }
+      return migrateLegacySheet([...DEFAULT_SHEETS]);
+    }
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return migrateLegacySheet([...DEFAULT_SHEETS]);
     const valid = parsed.filter(isValidSheet);
     if (valid.length === 0) return migrateLegacySheet([...DEFAULT_SHEETS]);
-    return valid;
+    return mergeWithDefaults(valid);
   } catch {
     return [...DEFAULT_SHEETS];
   }
+};
+
+// Ensure both seeded sheets exist with current permissions; drop legacy
+// 'user'/'rajendra' grants on load so removed users stay removed.
+const mergeWithDefaults = (sheets) => {
+  const byId = new Map(sheets.map((s) => [s.id, { ...s }]));
+  DEFAULT_SHEETS.forEach((d) => {
+    const cur = byId.get(d.id);
+    if (!cur) {
+      byId.set(d.id, { ...d });
+    } else {
+      const allowed = new Set([...(cur.allowedUsers || []), ...d.allowedUsers]);
+      allowed.delete('user');
+      allowed.delete('rajendra');
+      cur.allowedUsers = [...allowed];
+      // Keep the seeded sheetId authoritative unless admin customized it.
+      byId.set(d.id, cur);
+    }
+  });
+  // Rename any lingering old ids.
+  if (byId.has('main') && !byId.has('bangalore')) {
+    const m = byId.get('main');
+    byId.delete('main');
+    byId.set('bangalore', { ...m, id: 'bangalore', name: m.name === 'Main' ? 'Bangalore' : m.name });
+  }
+  if (byId.has('rajendra-nagar') && !byId.has('hyderabad')) {
+    const m = byId.get('rajendra-nagar');
+    byId.delete('rajendra-nagar');
+    byId.set('hyderabad', { ...m, id: 'hyderabad', name: /rajendra/i.test(m.name || '') ? 'Hyderabad' : m.name });
+  }
+  return [...byId.values()];
 };
 
 // Preserve a previous single-sheet admin setting (pre multi-sheet) by
