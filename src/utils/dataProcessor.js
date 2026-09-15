@@ -30,6 +30,10 @@ export const normalizeSkuKey = (str) => str?.trim().toLowerCase().replace(/[^a-z
 const defaultCriticalRows = [
   ['Curd 1Kg Tub', 4, 7],
   ['Curd Pouch', 3, 7],
+  ['Curd 400g Cup', 3, 7],
+  ['Yogurt Mango', 10, 10],
+  ['Yogurt Blueberry', 10, 10],
+  ['Yogurt Strawberry', 10, 10],
   ['Paneer 165gm', 10, 10],
   ['Paneer 200gm', 10, 10],
   ['Paneer 500gm', 3, 10],
@@ -74,6 +78,41 @@ const isStockColumn = (key) => {
   return normalized.includes('stock') || normalized.includes('avail');
 };
 
+const STORE_NAME_KEYS = ['Store name', 'Store Name', 'store name', 'store', 'outlet', 'location'];
+
+// Stores may come from a shared master list, but each sheet can also carry
+// its own stores (e.g. Rajendra Nagar is not in STORE_MASTER). Build the
+// working store list as: master stores + any response-only stores.
+const getStoreNameFromResponse = (row) => {
+  for (const key of STORE_NAME_KEYS) {
+    const v = row?.[key];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+  }
+  return '';
+};
+
+export const collectStoresForResponses = (responses, stores = []) => {
+  const normalize = (str) => str?.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  const seen = new Map();
+  (stores || [])
+    .filter((s) => s && s['Store Name'] && String(s['Store Name']).trim() !== '')
+    .forEach((s) => seen.set(normalize(s['Store Name']), s));
+  (responses || []).forEach((r) => {
+    const name = getStoreNameFromResponse(r);
+    if (!name) return;
+    const key = normalize(name);
+    if (!key || seen.has(key)) return;
+    // Synthesize a master-like entry so downstream code works unchanged.
+    seen.set(key, {
+      'Store ID': `sheet-${key}`,
+      'Store Name': name,
+      'Store Code': name,
+      __fromResponse: true
+    });
+  });
+  return [...seen.values()];
+};
+
 const hasValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
 
 const PANEER_165_KEY = normalizeSkuKey('Paneer 165gm');
@@ -82,10 +121,20 @@ const PANEER_200_KEY = normalizeSkuKey('Paneer 200gm');
 const getCriticalSetting = (criticalSettings, sku) => {
   const candidates = [
     sku,
+    // Sheet spelling variants that must share one threshold
+    sku.replace(/Curd\s*1Kg\s*Pouch/i, 'Curd Pouch'),
+    sku.replace(/^Curd Pouch$/i, 'Curd 1Kg Pouch'),
     sku.replace(/Choccolate/i, 'Chocolate'),
+    sku.replace(/Chocolate/i, 'Choccolate'),
     sku.replace(/Vanilla/i, 'Vannila'),
+    sku.replace(/Vannila/i, 'Vanilla'),
     sku.replace(/Dhoodh/i, 'Doodh'),
+    sku.replace(/Doodh/i, 'Dhoodh'),
     sku.replace(/Milkyshot/i, 'Milky Shot'),
+    sku.replace(/Milky\s*Shot/i, 'Milkyshot'),
+    sku.replace(/110ml\s*Badam\s*Milk/i, 'Badam Milk 175ml'),
+    sku.replace(/Kesar\s*Milk\s*Pet/i, 'Kesar Milk'),
+    sku.replace(/^Kesar Milk$/i, 'Kesar Milk Pet'),
     `${sku} Pet`
   ];
 
@@ -147,15 +196,19 @@ export const processInventoryData = (responses, stores, criticalSettings = {}) =
   // the response sheet headers so spelling stays consistent with form data.
   const skuMeta = buildSkuMeta(responses, criticalSettings);
 
-  // Map stores with fuzzy matching
-  const storeData = stores
+  // Map stores with fuzzy matching. The working list includes master stores
+  // plus any store names seen only in this sheet's responses.
+  const workingStores = collectStoresForResponses(responses, stores);
+  const storeData = workingStores
     .filter(store => store['Store Name'])
     .map(store => {
       const sName = normalize(store['Store Name']);
       
-      // Find responses for this store, accounting for typos
+      // Find responses for this store, accounting for typos.
+      // Use the same response store-name extraction as collectStoresForResponses
+      // so sheets with slightly different header spellings still match.
       const storeResponses = sortedResponses.filter(r => {
-        const rName = normalize(r['Store name'] || '');
+        const rName = normalize(getStoreNameFromResponse(r) || '');
         if (!rName) return false;
         // Direct match, substring match, or match on first ~5 significant chars
         return rName === sName || rName.includes(sName) || sName.includes(rName) ||
@@ -252,13 +305,19 @@ export const processInventoryData = (responses, stores, criticalSettings = {}) =
         storeCode: store['Store Code'],
         products: latestStatus,
         hasAnyData,
+        fromSheet: !!store.__fromResponse,
         status: !hasAnyData ? 'no-data' : hasCritical ? 'critical' : hasExpiring ? 'warning' : 'healthy',
         lastUpdated: mostRecentUpdate
       };
+    })
+    // Stores with data first, then no-data stores, alphabetical within groups.
+    .sort((a, b) => {
+      if (a.hasAnyData !== b.hasAnyData) return a.hasAnyData ? -1 : 1;
+      return String(a.storeName).localeCompare(String(b.storeName));
     });
 
   return storeData;
-};
+}
 
 /**
  * Finds stock, manufacturing, and expiry columns for a given SKU using a

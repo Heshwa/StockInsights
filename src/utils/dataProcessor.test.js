@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { processInventoryData } from './dataProcessor.js';
+import { processInventoryData, collectStoresForResponses } from './dataProcessor.js';
 
 const stores = [{
   'Store ID': '1',
@@ -68,4 +68,46 @@ test('does not show an expiry date for an exact SKU with zero stock', () => {
   assert.equal(products['Paneer 165gm'].expiryDate, null);
   assert.equal(products['Paneer 165gm'].daysLeft, null);
   assert.equal(products['Paneer 165gm'].isCritical, true);
+});
+
+test('adds response-only stores missing from the master list', () => {
+  const out = processInventoryData([{
+    Timestamp: '9/10/2026 15:57:22',
+    'Store name': 'Rajendra Nagar',
+    'Curd 1Kg Tub - Stock availability': '25',
+    'Curd 1Kg Expiry Date': '9/15/2026',
+    'Curd 400g Cup- Stock Availabiity': '12',
+    'Curd 400g Cup - Expiry Date ': '9/14/2026',
+    'Yogurt Mango- Stock Availabiity': '26',
+    'Yogurt Mango  - Expiry Date ': '9/22/2026',
+    'Yogurt Blueberry- Stock Availabiity': '10',
+    'Yogurt Blueberry- Expiry Date ': '9/15/2026'
+  }], stores);
+
+  const rajendra = out.find((s) => s.storeName === 'Rajendra Nagar');
+  assert.ok(rajendra, 'response-only store should appear');
+  assert.equal(rajendra.hasAnyData, true);
+  assert.equal(rajendra.fromSheet, true);
+  const bySku = Object.fromEntries(rajendra.products.map((p) => [p.sku, p]));
+  assert.equal(bySku['Curd 1Kg Tub'].stock, 25);
+  assert.equal(bySku['Yogurt Mango'].stock, 26);
+  assert.equal(bySku['Yogurt Mango'].expiryDate, '9/22/2026');
+  assert.equal(bySku['Curd 400g Cup'].criticalLevel, 3);
+  assert.equal(bySku['Yogurt Blueberry'].criticalLevel, 10);
+});
+
+test('keeps master stores without data as no-data instead of dropping them', () => {
+  const out = processInventoryData([{
+    Timestamp: '9/10/2026 15:57:22',
+    'Store name': 'Rajendra Nagar',
+    'Curd 1Kg Tub - Stock availability': '25',
+    'Curd 1Kg Expiry Date': '9/15/2026'
+  }], stores);
+  assert.equal(out.find((s) => s.storeName === 'Yeshwanthpura').status, 'no-data');
+});
+
+test('collectStoresForResponses merges master + response-only stores', () => {
+  const merged = collectStoresForResponses([{ 'Store name': 'Rajendra Nagar' }], stores);
+  assert.ok(merged.some((s) => s['Store Name'] === 'Rajendra Nagar'));
+  assert.ok(merged.some((s) => s['Store Name'] === 'Yeshwanthpura'));
 });

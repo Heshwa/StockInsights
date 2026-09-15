@@ -53,6 +53,7 @@ function App() {
   const [sheetState, setSheetState] = useState({});
   const [loadingSheets, setLoadingSheets] = useState({}); // configId -> bool
   const [activeSheetId, setActiveSheetId] = useState(null);
+  const [hideEmptyStores, setHideEmptyStores] = useState(false);
   const [selectedStore, setSelectedStore] = useState(null);
   const isAdmin = userRole === 'admin';
 
@@ -266,7 +267,7 @@ function App() {
               <button
                 key={s.id}
                 className={`sheet-tab ${activeSheet?.id === s.id ? 'active' : ''}`}
-                onClick={() => { setSelectedStore(null); setActiveSheetId(s.id); }}
+                onClick={() => { setSelectedStore(null); setActiveSheetId(s.id); setHideEmptyStores(false); }}
               >
                 <FileSpreadsheet size={16} />
                 {s.name}
@@ -277,6 +278,16 @@ function App() {
               <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
                 No sheets assigned to {username}. Ask an admin to grant access in Settings.
               </span>
+            )}
+            {visibleSheets.length > 0 && activeSheet && (
+              <label className="hide-empty-toggle" title="Sheets can share one store list; hide stores with no rows in this sheet">
+                <input
+                  type="checkbox"
+                  checked={hideEmptyStores}
+                  onChange={(e) => setHideEmptyStores(e.target.checked)}
+                />
+                Hide stores with no data
+              </label>
             )}
           </div>
         )}
@@ -294,7 +305,10 @@ function App() {
               ) : loading && data.length === 0 ? (
                 <div className="card">Loading {activeSheet.name}…</div>
               ) : (
-                <DashboardOverview data={data} onStoreClick={setSelectedStore} />
+                <DashboardOverview
+                  data={hideEmptyStores ? data.filter((s) => s.hasAnyData) : data}
+                  onStoreClick={setSelectedStore}
+                />
               )}
             </>
           )}
