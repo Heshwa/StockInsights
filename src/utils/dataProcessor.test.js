@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { processInventoryData, collectStoresForResponses } from './dataProcessor.js';
+import { KNOWN_STORES } from '../config/sheets.js';
 
 const stores = [{
   'Store ID': '1',
@@ -106,8 +107,30 @@ test('keeps master stores without data as no-data instead of dropping them', () 
   assert.equal(out.find((s) => s.storeName === 'Yeshwanthpura').status, 'no-data');
 });
 
+test('preserves google sheet column order for products (hyderabad sheet)', () => {
+  const out = processInventoryData([{
+    Timestamp: '9/10/2026 15:57:22',
+    'Store name': 'Kukatpally',
+    'Curd 1Kg Tub - Stock availability': '25',
+    'Curd 1Kg Expiry Date': '9/15/2026',
+    'Curd 1Kg Pouch- Stock Availabiity': '34',
+    'Curd 1Kg Pouch - Expiry Date ': '9/17/2026',
+    'Curd 400g Cup- Stock Availabiity': '12',
+    'Curd 400g Cup - Expiry Date ': '9/14/2026',
+    'Yogurt Mango- Stock Availabiity': '26',
+    'Yogurt Mango  - Expiry Date ': '9/22/2026'
+  }], stores);
+  const order = out.find((s) => s.storeName === 'Kukatpally').products.map((p) => p.sku);
+  assert.deepEqual(order.slice(0, 4), ['Curd 1Kg Tub', 'Curd 1Kg Pouch', 'Curd 400g Cup', 'Yogurt Mango']);
+});
+
 test('collectStoresForResponses merges master + response-only stores', () => {
   const merged = collectStoresForResponses([{ 'Store name': 'Rajendra Nagar' }], stores);
   assert.ok(merged.some((s) => s['Store Name'] === 'Rajendra Nagar'));
   assert.ok(merged.some((s) => s['Store Name'] === 'Yeshwanthpura'));
+});
+
+test('hyderabad tab is scoped to the four hyderabad stores', () => {
+  assert.deepEqual(KNOWN_STORES.hyderabad, ['Kukatpally', 'Uppal', 'Rajendra Nagar', 'Kompally']);
+  assert.deepEqual(KNOWN_STORES.bangalore.length, 6);
 });

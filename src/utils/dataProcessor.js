@@ -61,10 +61,11 @@ export const DEFAULT_CRITICAL_SETTINGS = defaultCriticalRows.reduce((acc, [sku, 
   return acc;
 }, {});
 
-// Ordered list of normalized SKU keys from the default rows, used to sort
-// products in the UI so they appear in the intended default order regardless
-// of the Google Sheet column order.
+// Ordered list of normalized SKU keys from the default rows. Kept only as a
+// reference for threshold defaults — product display order always follows the
+// Google Sheet column order (see buildSkuMeta).
 const DEFAULT_SKU_ORDER = defaultCriticalRows.map(([sku]) => normalizeSkuKey(sku));
+void DEFAULT_SKU_ORDER;
 
 const extractSkuNameFromColumn = (columnName) => {
   if (!columnName) return '';
@@ -152,6 +153,9 @@ export const buildSkuMeta = (responses, criticalSettings = {}) => {
   const headerRow = responses.find(r => Object.keys(r).length > 2) || responses[0];
   if (!headerRow) return [];
 
+  // IMPORTANT: preserve Google Sheet column order — do not sort.
+  // Both the dashboard product table and the Settings critical-level table
+  // must follow the sheet's left-to-right column sequence.
   return Object.keys(headerRow)
     .filter(isStockColumn)
     .map(stockColumn => {
@@ -166,18 +170,7 @@ export const buildSkuMeta = (responses, criticalSettings = {}) => {
         cols
       };
     })
-    .filter(item => item.sku)
-    // Sort by the default order so products appear in the intended sequence
-    // in the UI regardless of the Google Sheet column order. Items not in the
-    // default list keep their original sheet order and appear after defaults.
-    .sort((a, b) => {
-      const ia = DEFAULT_SKU_ORDER.indexOf(normalizeSkuKey(a.sku));
-      const ib = DEFAULT_SKU_ORDER.indexOf(normalizeSkuKey(b.sku));
-      if (ia === -1 && ib === -1) return 0;
-      if (ia === -1) return 1;
-      if (ib === -1) return -1;
-      return ia - ib;
-    });
+    .filter(item => item.sku);
 };
 
 /**

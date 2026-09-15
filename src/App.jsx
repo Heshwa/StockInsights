@@ -27,7 +27,8 @@ import {
   loadSheets,
   saveSheets,
   loadCriticalForSheet,
-  saveCriticalForSheet
+  saveCriticalForSheet,
+  KNOWN_STORES
 } from './config/sheets';
 import { Msg as SettingsMsg, CriticalTable, SheetsManager, CopyConfigButton } from './components/Settings';
 import { UsersManager } from './components/UsersManager';
@@ -83,10 +84,31 @@ function App() {
         || loadCriticalForSheet(sheet.id);
       const responsesUrl = `https://docs.google.com/spreadsheets/d/${sheet.sheetId}/export?format=csv`;
 
-      const [resp, stores] = await Promise.all([
+      const [resp, masterStores] = await Promise.all([
         fetchCsv(responsesUrl),
         fetchCsv('/STORE_MASTER-Table 1.csv')
       ]);
+
+      // Per-sheet store scoping:
+      // - Bangalore tab uses the real Bangalore master (shared CSV).
+      // - Hyderabad tab uses ONLY its four stores; the Bangalore master rows
+      //   must never leak into the Hyderabad tab (and vice versa).
+      // Response-only stores are still auto-added on top as a safety net.
+      const scopedMaster = (KNOWN_STORES[sheet.id] || KNOWN_STORES[sheet.sheetId])
+        ? masterStores.filter((m) => (KNOWN_STORES[sheet.id] || []).some(
+            (n) => String(n).trim().toLowerCase() === String(m['Store Name'] || '').trim().toLowerCase()
+          ))
+        : masterStores;
+      const stores = (KNOWN_STORES[sheet.id] || []).length > 0
+        ? [
+            ...scopedMaster,
+            ...(KNOWN_STORES[sheet.id] || [])
+              .filter((n) => !scopedMaster.some(
+                (m) => String(m['Store Name'] || '').trim().toLowerCase() === String(n).trim().toLowerCase()
+              ))
+              .map((n) => ({ 'Store ID': `known-${sheet.id}-${n}`, 'Store Name': n, 'Store Code': n }))
+          ]
+        : masterStores;
 
       const processed = processInventoryData(resp, stores, settings);
       setSheetState((prev) => ({
