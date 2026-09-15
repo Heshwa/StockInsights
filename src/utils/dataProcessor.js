@@ -169,8 +169,28 @@ export const buildSkuMeta = (responses, criticalSettings = {}) => {
   // IMPORTANT: preserve Google Sheet column order — do not sort.
   // Both the dashboard product table and the Settings critical-level table
   // must follow the sheet's left-to-right column sequence.
-  return Object.keys(headerRow)
-    .filter(isStockColumn)
+  // Exception: Paneer 165gm's stock column was appended at the very end of
+  // the Bangalore form AFTER all other products, while its expiry column
+  // sits with the other Paneers near the top. Display 165gm with the Paneer
+  // family (right after Paneer 200gm stock position) instead of last.
+  const stockColumns = Object.keys(headerRow).filter(isStockColumn);
+  const paneer165Key = normalizeSkuKey('Paneer 165gm');
+  const paneer200Key = normalizeSkuKey('Paneer 200gm');
+  const orderedStockColumns = [...stockColumns];
+  const idx165 = orderedStockColumns.findIndex(
+    (c) => normalizeSkuKey(extractSkuNameFromColumn(c)) === paneer165Key
+  );
+  if (idx165 > -1) {
+    const [col165] = orderedStockColumns.splice(idx165, 1);
+    // Display order: Paneer 200gm, Paneer 165gm, Paneer 500gm.
+    // Insert directly after the 200gm stock column so 165gm sits with the
+    // family even though its sheet column was appended at the end.
+    const idx200 = orderedStockColumns.findIndex(
+      (c) => normalizeSkuKey(extractSkuNameFromColumn(c)) === paneer200Key
+    );
+    orderedStockColumns.splice(idx200 > -1 ? idx200 + 1 : 0, 0, col165);
+  }
+  return orderedStockColumns
     .map(stockColumn => {
       const sku = extractSkuNameFromColumn(stockColumn);
       const setting = getCriticalSetting(criticalSettings, sku);

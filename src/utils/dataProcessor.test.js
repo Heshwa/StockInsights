@@ -135,6 +135,28 @@ test('hyderabad tab is scoped to the four hyderabad stores', () => {
   assert.deepEqual(KNOWN_STORES.bangalore.length, 6);
 });
 
+test('places Paneer 165gm with the other Paneers, not last (bangalore sheet)', () => {
+  const out = processInventoryData([{
+    Timestamp: '8/24/2026 12:15:40',
+    'Store name': 'Kanakapura',
+    'Curd 1Kg Tub - Stock availability': '5',
+    'Curd 1Kg Expiry Date': '9/19/2026',
+    'Paneer 200gm - Stock Availability ': '60',
+    'Paneer 200gm Expiry Date': '9/19/2026',
+    'Paneer 165gm Expiry Date': '9/11/2026',
+    'Paneer 500gm - Stock Avialbility': '22',
+    'Paneer 500 gm Expiry date': '10/23/2026',
+    'Mysore Pak - Stock Availability': '4',
+    'Mysore Pak - Expiry Date ': '10/17/2026',
+    'Paneer 165gm - Stock Availability ': '46'
+  }], stores);
+  const order = out[0].products.map((p) => p.sku);
+  assert.deepEqual(
+    order.filter((s) => s.startsWith('Paneer')),
+    ['Paneer 200gm', 'Paneer 165gm', 'Paneer 500gm']
+  );
+});
+
 test('merges Kangapura responses into the Kanakapura card', () => {
   const master = [{ 'Store ID': '10601135', 'Store Name': 'Kanakapura', 'Store Code': 'TOSL' }];
   const out = processInventoryData([
