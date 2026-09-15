@@ -1,97 +1,150 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Papa from 'papaparse';
-import { 
-  LayoutDashboard, 
-  Settings as SettingsIcon, 
-  RefreshCcw, 
-  AlertTriangle, 
-  CheckCircle2, 
+import {
+  LayoutDashboard,
+  Settings as SettingsIcon,
+  RefreshCcw,
+  AlertTriangle,
+  CheckCircle2,
   Search,
   Package,
   Calendar,
   AlertCircle,
-  Save,
-  LogOut
+  LogOut,
+  FileSpreadsheet
 } from 'lucide-react';
 import { buildSkuMeta, normalizeSkuKey, processInventoryData } from './utils/dataProcessor';
 import Login from './components/Login';
-import { login as authLogin, logout as authLogout, isLoggedIn, getUserRole } from './utils/auth';
+import {
+  login as authLogin,
+  logout as authLogout,
+  isLoggedIn,
+  getUserRole,
+  getUsername,
+  getAllUsers
+} from './utils/auth';
+import {
+  loadSheets,
+  saveSheets,
+  loadCriticalForSheet,
+  saveCriticalForSheet
+} from './config/sheets';
+import { Msg as SettingsMsg, CriticalTable, SheetsManager, CopyConfigButton } from './components/Settings';
+import { UsersManager } from './components/UsersManager';
+
+const fetchCsv = (url) => {
+  return new Promise((resolve, reject) => {
+    Papa.parse(url, {
+      download: true,
+      header: true,
+      complete: (results) => resolve(results.data),
+      error: (err) => reject(err)
+    });
+  });
+};
 
 function App() {
   const [loggedIn, setLoggedIn] = useState(isLoggedIn);
   const [userRole, setUserRole] = useState(getUserRole);
+  const [username, setUsername] = useState(getUsername);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [sheetId, setSheetId] = useState(localStorage.getItem('sheetId') || '1PyCT1HTPvcGb_70eYPcrhCp-AgjGrLTi7tJ4gGIpVd8');
-  const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [lastRefreshed, setLastRefreshed] = useState(null);
+  const [sheets, setSheets] = useState(loadSheets);
+  // configId -> { data, criticalItems, criticalSettings, lastRefreshed, loading, error }
+  const [sheetState, setSheetState] = useState({});
+  const [loadingSheets, setLoadingSheets] = useState({}); // configId -> bool
+  const [activeSheetId, setActiveSheetId] = useState(null);
   const [selectedStore, setSelectedStore] = useState(null);
-  const [criticalItems, setCriticalItems] = useState([]);
   const isAdmin = userRole === 'admin';
-  const [criticalSettings, setCriticalSettings] = useState(() => {
-    try {
-      const saved = localStorage.getItem('criticalLevelSettings');
-      const legacy = localStorage.getItem('criticalLevelOverrides');
-      return JSON.parse(saved || legacy || '{}');
-    } catch {
-      return {};
-    }
-  });
 
-  const fetchData = useCallback(async (nextSheetId = sheetId, settings = criticalSettings, skipCriticalRebuild = false) => {
-    setLoading(true);
+  const visibleSheets = isAdmin
+    ? sheets
+    : sheets.filter((s) => s.allowedUsers.includes(username));
+  const activeSheet = visibleSheets.find((s) => s.id === activeSheetId) || visibleSheets[0] || null;
+  const activeCache = (activeSheet && sheetState[activeSheet.id]) || {
+    data: [],
+    criticalItems: [],
+    criticalSettings: loadCriticalForSheet(activeSheet?.id || 'main'),
+    lastRefreshed: null,
+    error: null
+  };
+  const loading = activeSheet ? !!loadingSheets[activeSheet.id] : false;
+  const data = activeCache.data;
+  const criticalItems = activeCache.criticalItems;
+  const criticalSettings = activeCache.criticalSettings;
+  const lastRefreshed = activeCache.lastRefreshed;
+
+  const fetchSheetData = useCallback(async (sheet, settingsOverride, skipCriticalRebuild = false) => {
+    if (!sheet) return;
+    setLoadingSheets((prev) => ({ ...prev, [sheet.id]: true }));
     try {
-      // For now, load local files as fallback if sheetId is empty
-      // In production, we'd use the sheetId to build the URL
-      const responsesUrl = `https://docs.google.com/spreadsheets/d/${nextSheetId}/export?format=csv`;
-      
+      const settings = settingsOverride
+        || sheetState[sheet.id]?.criticalSettings
+        || loadCriticalForSheet(sheet.id);
+      const responsesUrl = `https://docs.google.com/spreadsheets/d/${sheet.sheetId}/export?format=csv`;
+
       const [resp, stores] = await Promise.all([
         fetchCsv(responsesUrl),
         fetchCsv('/STORE_MASTER-Table 1.csv')
       ]);
 
       const processed = processInventoryData(resp, stores, settings);
-      // Only rebuild critical items from settings when NOT called from saveCriticalLevels.
-      // When called from saveCriticalLevels, the items are already set with user edits.
-      if (!skipCriticalRebuild) {
-        setCriticalItems(buildSkuMeta(resp, settings));
-      }
-      setData(processed);
-      setSelectedStore(current => (
-        current ? processed.find(store => store.storeId === current.storeId) || current : current
+      setSheetState((prev) => ({
+        ...prev,
+        [sheet.id]: {
+          data: processed,
+          criticalItems: skipCriticalRebuild
+            ? (prev[sheet.id]?.criticalItems || buildSkuMeta(resp, settings))
+            : buildSkuMeta(resp, settings),
+          criticalSettings: settings,
+          lastRefreshed: new Date().toLocaleString(),
+          error: null
+        }
+      }));
+      setSelectedStore((current) => (
+        current ? processed.find((store) => store.storeId === current.storeId) || current : current
       ));
-      setLastRefreshed(new Date().toLocaleString());
     } catch (err) {
       console.error('Fetch error:', err);
-      alert('Error fetching data. Ensure the Google Sheet is published to web.');
+      setSheetState((prev) => ({
+        ...prev,
+        [sheet.id]: {
+          data: prev[sheet.id]?.data || [],
+          criticalItems: prev[sheet.id]?.criticalItems || [],
+          criticalSettings: prev[sheet.id]?.criticalSettings || loadCriticalForSheet(sheet.id),
+          lastRefreshed: prev[sheet.id]?.lastRefreshed || null,
+          error: 'Error fetching data. Ensure the Google Sheet is published to web.'
+        }
+      }));
     } finally {
-      setLoading(false);
+      setLoadingSheets((prev) => ({ ...prev, [sheet.id]: false }));
     }
-  }, [sheetId, criticalSettings]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const fetchCsv = (url) => {
-    return new Promise((resolve, reject) => {
-      Papa.parse(url, {
-        download: true,
-        header: true,
-        complete: (results) => resolve(results.data),
-        error: (err) => reject(err)
-      });
-    });
-  };
+  const refreshAllVisible = useCallback(() => {
+    visibleSheets.forEach((s) => fetchSheetData(s));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(visibleSheets.map((s) => s.id + s.sheetId))]);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    // Load every visible sheet once its id/sheetId set is known.
+    // Each sheet caches independently so switching tabs is instant.
+    visibleSheets.forEach((s) => {
+      if (!sheetState[s.id] && !loadingSheets[s.id]) fetchSheetData(s);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(visibleSheets.map((s) => s.id + s.sheetId))]);
 
-  const saveSettings = (id) => {
-    setSheetId(id);
-    localStorage.setItem('sheetId', id);
-    alert('Settings saved. Refreshing data...');
-    fetchData(id);
-  };
+  // If the active sheet disappears (permissions changed), fall back safely.
+  useEffect(() => {
+    if (activeSheetId && !visibleSheets.some((s) => s.id === activeSheetId)) {
+      setActiveSheetId(null);
+      setSelectedStore(null);
+    }
+  }, [visibleSheets, activeSheetId]);
 
-  const saveCriticalLevels = (items) => {
+  const saveCriticalLevels = (items, sheet = activeSheet) => {
+    if (!sheet) return;
     const nextSettings = items.reduce((acc, item) => {
       acc[normalizeSkuKey(item.sku)] = {
         criticalLevel: item.criticalLevel,
@@ -100,20 +153,37 @@ function App() {
       return acc;
     }, {});
 
-    setCriticalSettings(nextSettings);
-    localStorage.setItem('criticalLevelSettings', JSON.stringify(nextSettings));
-    setCriticalItems(items);
+    saveCriticalForSheet(sheet.id, nextSettings);
+    setSheetState((prev) => ({
+      ...prev,
+      [sheet.id]: {
+        data: prev[sheet.id]?.data || [],
+        criticalItems: items,
+        criticalSettings: nextSettings,
+        lastRefreshed: prev[sheet.id]?.lastRefreshed || null,
+        error: null
+      }
+    }));
     alert('Critical levels saved. Refreshing data...');
-    // Pass true for skipCriticalRebuild to prevent fetchData from overwriting
+    // Pass true for skipCriticalRebuild to prevent fetch from overwriting
     // the items we just set with buildSkuMeta.
-    fetchData(sheetId, nextSettings, true);
+    fetchSheetData(sheet, nextSettings, true);
   };
 
-  const handleLogin = (username, password) => {
-    const result = authLogin(username, password);
+  const handleSaveSheets = (nextSheets) => {
+    setSheets(nextSheets);
+    saveSheets(nextSheets);
+  };
+
+  const handleLogin = (name, password) => {
+    const result = authLogin(name, password);
     if (result.success) {
       setLoggedIn(true);
       setUserRole(result.role);
+      setUsername(result.username);
+      setActiveSheetId(null);
+      setSelectedStore(null);
+      setActiveTab('dashboard');
     }
     return result;
   };
@@ -122,6 +192,9 @@ function App() {
     authLogout();
     setLoggedIn(false);
     setUserRole('viewer');
+    setUsername('');
+    setActiveSheetId(null);
+    setSelectedStore(null);
   };
 
   if (!loggedIn) {
@@ -136,7 +209,7 @@ function App() {
           <span style={{ fontSize: '1rem', lineHeight: 1.3, whiteSpace: 'normal', wordBreak: 'break-word' }}>Metro Cash & Carry Management</span>
         </div>
         <nav className="nav">
-          <button 
+          <button
             className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
             onClick={() => { setActiveTab('dashboard'); setSelectedStore(null); }}
           >
@@ -144,7 +217,7 @@ function App() {
             Dashboard
           </button>
           {isAdmin && (
-            <button 
+            <button
               className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
               onClick={() => { setActiveTab('settings'); setSelectedStore(null); }}
             >
@@ -154,7 +227,10 @@ function App() {
           )}
         </nav>
         <div style={{ padding: '1rem' }}>
-          <button 
+          <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem', padding: '0 1rem' }}>
+            Signed in as <strong style={{ color: '#e2e8f0' }}>{username}</strong> ({userRole})
+          </div>
+          <button
             className="nav-item"
             onClick={handleLogout}
             style={{ color: '#94a3b8' }}
@@ -176,27 +252,63 @@ function App() {
             )}
           </div>
           <div className="topbar-right">
-            <span className="last-refresh">Last Refreshed: {lastRefreshed}</span>
-            <button className="btn btn-primary" onClick={() => fetchData()} disabled={loading}>
+            <span className="last-refresh">Last Refreshed: {lastRefreshed || '—'}</span>
+            <button className="btn btn-primary" onClick={() => activeSheet && fetchSheetData(activeSheet)} disabled={loading || !activeSheet}>
               <RefreshCcw size={18} style={{ marginRight: '8px', animation: loading ? 'spin 1s linear infinite' : 'none' }} />
               Refresh
             </button>
           </div>
         </header>
 
+        {(activeTab === 'dashboard') && (
+          <div className="sheet-tabs">
+            {visibleSheets.map((s) => (
+              <button
+                key={s.id}
+                className={`sheet-tab ${activeSheet?.id === s.id ? 'active' : ''}`}
+                onClick={() => { setSelectedStore(null); setActiveSheetId(s.id); }}
+              >
+                <FileSpreadsheet size={16} />
+                {s.name}
+                {loadingSheets[s.id] && <span className="sheet-tab-spinner" />}
+              </button>
+            ))}
+            {visibleSheets.length === 0 && (
+              <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                No sheets assigned to {username}. Ask an admin to grant access in Settings.
+              </span>
+            )}
+          </div>
+        )}
+
         <section className="content-area">
           {activeTab === 'dashboard' && !selectedStore && (
-            <DashboardOverview data={data} onStoreClick={setSelectedStore} />
+            <>
+              {activeCache.error && (
+                <div style={{ background: '#fef2f2', border: '1px solid #fecaca', padding: '1rem', borderRadius: '8px', marginBottom: '1rem', color: '#991b1b' }}>
+                  ⚠️ {activeCache.error}
+                </div>
+              )}
+              {!activeSheet ? (
+                <div className="card">No sheets available for this user.</div>
+              ) : loading && data.length === 0 ? (
+                <div className="card">Loading {activeSheet.name}…</div>
+              ) : (
+                <DashboardOverview data={data} onStoreClick={setSelectedStore} />
+              )}
+            </>
           )}
           {activeTab === 'dashboard' && selectedStore && (
             <StoreDetail store={selectedStore} />
           )}
           {activeTab === 'settings' && (
             <Settings
-              sheetId={sheetId}
-              onSave={saveSettings}
-              criticalItems={criticalItems}
+              sheets={sheets}
+              onSaveSheets={handleSaveSheets}
+              onRefreshSheet={fetchSheetData}
+              sheetState={sheetState}
               onSaveCriticalLevels={saveCriticalLevels}
+              currentUsername={username}
             />
           )}
         </section>
@@ -535,88 +647,51 @@ function StoreDetail({ store }) {
   );
 }
 
-function Settings({ sheetId, onSave, criticalItems, onSaveCriticalLevels }) {
-  const [val, setVal] = useState(sheetId);
-  const [items, setItems] = useState(criticalItems);
+function Settings({ sheets, onSaveSheets, onRefreshSheet, sheetState, onSaveCriticalLevels, currentUsername }) {
+  const [users, setUsers] = useState(getAllUsers);
+  const [drafts, setDrafts] = useState(() =>
+    sheets.map((s) => ({ id: s.id, name: s.name, sheetInput: s.sheetId, allowedUsers: [...s.allowedUsers] }))
+  );
+  const [newName, setNewName] = useState('');
+  const [newSheetInput, setNewSheetInput] = useState('');
+  const [criticalSheetId, setCriticalSheetId] = useState(sheets[0]?.id || null);
+  const [msg, setMsg] = useState(null);
 
   useEffect(() => {
-    setItems(criticalItems);
-  }, [criticalItems]);
+    setDrafts(sheets.map((s) => ({ id: s.id, name: s.name, sheetInput: s.sheetId, allowedUsers: [...s.allowedUsers] })));
+    if (!sheets.some((s) => s.id === criticalSheetId)) setCriticalSheetId(sheets[0]?.id || null);
+  }, [sheets]);
 
-  const updateItem = (index, field, value) => {
-    const numericValue = Math.max(0, parseInt(value || 0, 10));
-    setItems(current => current.map((item, i) => (
-      i === index ? { ...item, [field]: numericValue } : item
-    )));
+  const showMsg = (type, text) => {
+    setMsg({ type, text });
+    setTimeout(() => setMsg(null), 4500);
   };
+
+  const criticalSheet = sheets.find((s) => s.id === criticalSheetId) || sheets[0];
+  const criticalCache = (criticalSheet && sheetState[criticalSheet.id]) || { criticalItems: [] };
 
   return (
     <div className="settings-layout">
+      <SettingsMsg msg={msg} />
+      <SheetsManager
+        sheets={sheets} users={users} drafts={drafts} setDrafts={setDrafts}
+        newName={newName} setNewName={setNewName} newSheetInput={newSheetInput}
+        setNewSheetInput={setNewSheetInput} showMsg={showMsg}
+        onSaveSheets={onSaveSheets} onRefreshSheet={onRefreshSheet}
+      />
       <div className="card settings-card">
         <div className="form-group">
-          <label>Google Sheet ID</label>
-          <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-            {"Enter the ID from your browser's address bar. The sheet must be published to the web (File > Share > Publish to web)."}
-          </p>
-          <div className="input-group">
-            <input 
-              type="text" 
-              value={val} 
-              onChange={(e) => setVal(e.target.value)} 
-              placeholder="e.g. 1a2b3c4d5e6f7g8h9i0j..."
-            />
-            <button className="btn btn-primary" onClick={() => onSave(val)}>Save & Update</button>
+          <label>Critical Levels — per sheet</label>
+          <div className="sheet-edit-row" style={{ marginBottom: '1rem' }}>
+            <select value={criticalSheetId || ''} onChange={(e) => setCriticalSheetId(e.target.value)} style={{ minWidth: '220px' }}>
+              {sheets.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            <CopyConfigButton drafts={drafts} showMsg={showMsg} />
           </div>
+          <CriticalTable key={criticalSheet?.id} items={criticalCache.criticalItems} onSave={(items) => onSaveCriticalLevels(items, criticalSheet)} />
         </div>
       </div>
-      <div className="card settings-card">
-        <div className="form-group">
-          <label>Critical Levels</label>
-          <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-            Product names follow the response sheet. Edits are saved in this browser and applied on refresh.
-          </p>
-          <div className="settings-table-wrapper">
-            <table className="settings-table">
-              <thead>
-                <tr>
-                  <th>Product Name</th>
-                  <th>Critical Stock</th>
-                  <th>Expiry Alert Days</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((item, index) => (
-                  <tr key={item.sku}>
-                    <td>{item.sku}</td>
-                    <td>
-                      <input
-                        type="number"
-                        min="0"
-                        value={item.criticalLevel}
-                        onChange={(e) => updateItem(index, 'criticalLevel', e.target.value)}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        type="number"
-                        min="0"
-                        value={item.expiryThreshold}
-                        onChange={(e) => updateItem(index, 'expiryThreshold', e.target.value)}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="settings-actions">
-            <button className="btn btn-primary" onClick={() => onSaveCriticalLevels(items)}>
-              <Save size={18} style={{ marginRight: '8px' }} />
-              Save Critical Levels
-            </button>
-          </div>
-        </div>
-      </div>
+      <UsersManager showMsg={showMsg} currentUsername={currentUsername} onUsersChanged={setUsers} />
     </div>
   );
 }
